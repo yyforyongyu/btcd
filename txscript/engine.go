@@ -101,7 +101,7 @@ const (
 	// output using the new taproot validation rules.
 	ScriptVerifyTaproot
 
-	// ScriptVerifyDiscourageUpgradeableWitnessProgram defines whether or
+	// ScriptVerifyDiscourageUpgradeableTaprootVersion defines whether or
 	// not to consider any new/unknown taproot leaf versions as
 	// non-standard.
 	ScriptVerifyDiscourageUpgradeableTaprootVersion
@@ -118,7 +118,86 @@ const (
 	// ScriptVerifyConstScriptCode fails non-segwit scripts if a signature
 	// match is found in the script code or if OP_CODESEPARATOR is used.
 	ScriptVerifyConstScriptCode
+
+	// scriptSentinal is a value used to represent the end of the script.
+	scriptSentinal
 )
+
+// String returns a human-readable description for the ScriptFlags.
+func (s ScriptFlags) String() string {
+	flagStr := ""
+	for i := 1; i < int(scriptSentinal); i = i << 1 {
+		flag := ScriptFlags(i)
+		if s&flag == flag {
+			flagStr += flag.string() + "|"
+			s -= flag
+		}
+	}
+
+	// Remove anything to the right of the final bar.
+	flagStr = strings.TrimRight(flagStr, "|")
+
+	// Add any remaining flags as unknown.
+	if s != 0 {
+		flagStr += "|" + s.string()
+	}
+
+	// If this was purely an unknown flag, then remove the extra bar at the
+	// start of the string.
+	flagStr = strings.TrimLeft(flagStr, "|")
+
+	return flagStr
+}
+
+// string returns the defined name for a single ScriptFlag.
+func (s ScriptFlags) string() string {
+	switch s {
+	case ScriptBip16:
+		return "ScriptBip16"
+	case ScriptStrictMultiSig:
+		return "ScriptStrictMultiSig"
+	case ScriptDiscourageUpgradableNops:
+		return "ScriptDiscourageUpgradableNops"
+	case ScriptVerifyCheckLockTimeVerify:
+		return "ScriptVerifyCheckLockTimeVerify"
+	case ScriptVerifyCheckSequenceVerify:
+		return "ScriptVerifyCheckSequenceVerify"
+	case ScriptVerifyCleanStack:
+		return "ScriptVerifyCleanStack"
+	case ScriptVerifyDERSignatures:
+		return "ScriptVerifyDERSignatures"
+	case ScriptVerifyLowS:
+		return "ScriptVerifyLowS"
+	case ScriptVerifyMinimalData:
+		return "ScriptVerifyMinimalData"
+	case ScriptVerifyNullFail:
+		return "ScriptVerifyNullFail"
+	case ScriptVerifySigPushOnly:
+		return "ScriptVerifySigPushOnly"
+	case ScriptVerifyStrictEncoding:
+		return "ScriptVerifyStrictEncoding"
+	case ScriptVerifyWitness:
+		return "ScriptVerifyWitness"
+	case ScriptVerifyDiscourageUpgradeableWitnessProgram:
+		return "ScriptVerifyDiscourageUpgradeableWitnessProgram"
+	case ScriptVerifyMinimalIf:
+		return "ScriptVerifyMinimalIf"
+	case ScriptVerifyWitnessPubKeyType:
+		return "ScriptVerifyWitnessPubKeyType"
+	case ScriptVerifyTaproot:
+		return "ScriptVerifyTaproot"
+	case ScriptVerifyDiscourageUpgradeableTaprootVersion:
+		return "ScriptVerifyDiscourageUpgradeableTaprootVersion"
+	case ScriptVerifyDiscourageOpSuccess:
+		return "ScriptVerifyDiscourageOpSuccess"
+	case ScriptVerifyDiscourageUpgradeablePubkeyType:
+		return "ScriptVerifyDiscourageUpgradeablePubkeyType"
+	case ScriptVerifyConstScriptCode:
+		return "ScriptVerifyConstScriptCode"
+	default:
+		return fmt.Sprintf("Unknown flag(%b)", s)
+	}
+}
 
 const (
 	// MaxStackSize is the maximum combined height of stack and alt stack

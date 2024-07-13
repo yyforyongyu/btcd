@@ -14,6 +14,7 @@ import (
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/wire"
+	"github.com/stretchr/testify/require"
 )
 
 // mustParseShortForm parses the passed short form script and returns the
@@ -1312,4 +1313,24 @@ func TestNewScriptClass(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestStandardVerifyFlags ensures the standard flags do not have non-standard
+// flags.
+func TestStandardVerifyFlags(t *testing.T) {
+	// Get all the flags.
+	var allFlags ScriptFlags
+	for i := 1; i < int(scriptSentinal); i = i << 1 {
+		flag := ScriptFlags(i)
+		t.Logf("has defined flag: %v", flag)
+		allFlags |= flag
+	}
+
+	// Calculate the flag difference.
+	excluded := StandardVerifyFlags ^ allFlags
+
+	// Assert the push-only flag is excluded.
+	require.Equal(t, ScriptVerifySigPushOnly, excluded, "expected flag %v "+
+		"to be excluded from standard flags, got %v",
+		ScriptVerifySigPushOnly, excluded)
 }
