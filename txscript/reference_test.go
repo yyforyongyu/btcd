@@ -499,156 +499,43 @@ testloop:
 
 // TestTxValidTests ensures all of the tests in tx_valid.json pass as expected.
 func TestTxValidTests(t *testing.T) {
-	file, err := os.ReadFile("data/tx_valid.json")
-	if err != nil {
-		t.Fatalf("TestTxValidTests: %v\n", err)
-	}
+	// Prepare the test cases.
+	testCases, err := prepareTxValidTestCase()
+	require.NoError(t, err)
 
-	var tests [][]interface{}
-	err = json.Unmarshal(file, &tests)
-	if err != nil {
-		t.Fatalf("TestTxValidTests couldn't Unmarshal: %v\n", err)
-	}
+	for _, tc := range testCases {
+		name := fmt.Sprintf("line %d", tc.lineNum)
+		t.Run(name, func(t *testing.T) {
+			t.Logf("Running test case %s", spew.Sdump(tc))
 
-	// form is either:
-	//   ["this is a comment "]
-	// or:
-	//   [[[previous hash, previous index, previous scriptPubKey, input value]...,]
-	//	serializedTransaction, verifyFlags]
-testloop:
-	for i, test := range tests {
-		inputs, ok := test[0].([]interface{})
-		if !ok {
-			continue
-		}
-
-		if len(test) != 3 {
-			t.Errorf("bad test (bad length) %d: %v", i, test)
-			continue
-		}
-		serializedhex, ok := test[1].(string)
-		if !ok {
-			t.Errorf("bad test (arg 2 not string) %d: %v", i, test)
-			continue
-		}
-		serializedTx, err := hex.DecodeString(serializedhex)
-		if err != nil {
-			t.Errorf("bad test (arg 2 not hex %v) %d: %v", err, i,
-				test)
-			continue
-		}
-
-		tx, err := btcutil.NewTxFromBytes(serializedTx)
-		if err != nil {
-			t.Errorf("bad test (arg 2 not msgtx %v) %d: %v", err,
-				i, test)
-			continue
-		}
-
-		verifyFlags, ok := test[2].(string)
-		if !ok {
-			t.Errorf("bad test (arg 3 not string) %d: %v", i, test)
-			continue
-		}
-
-		flags, err := parseScriptFlags(verifyFlags)
-		if err != nil {
-			t.Errorf("bad test %d: %v", i, err)
-			continue
-		}
-
-		prevOutFetcher := NewMultiPrevOutFetcher(nil)
-		for j, iinput := range inputs {
-			input, ok := iinput.([]interface{})
-			if !ok {
-				t.Errorf("bad test (%dth input not array)"+
-					"%d: %v", j, i, test)
-				continue
+			prevOutFetcher := NewMultiPrevOutFetcher(nil)
+			for _, inp := range tc.inputs {
+				op := wire.NewOutPoint(
+					&inp.prevHash, inp.prevIdx,
+				)
+				prevOutFetcher.AddPrevOut(*op, &wire.TxOut{
+					Value:    inp.amount,
+					PkScript: inp.scriptPubKey,
+				})
 			}
 
-			if len(input) < 3 || len(input) > 4 {
-				t.Errorf("bad test (%dth input wrong length)"+
-					"%d: %v", j, i, test)
-				continue
-			}
+			for k, txin := range tc.tx.MsgTx().TxIn {
+				prevOut := prevOutFetcher.FetchPrevOutput(
+					txin.PreviousOutPoint,
+				)
+				require.NotNil(t, prevOut)
 
-			previoustx, ok := input[0].(string)
-			if !ok {
-				t.Errorf("bad test (%dth input hash not string)"+
-					"%d: %v", j, i, test)
-				continue
-			}
+				vm, err := NewEngine(
+					prevOut.PkScript, tc.tx.MsgTx(), k,
+					tc.flags, nil, nil, prevOut.Value,
+					prevOutFetcher,
+				)
+				require.NoError(t, err, "failed to create vm")
 
-			prevhash, err := chainhash.NewHashFromStr(previoustx)
-			if err != nil {
-				t.Errorf("bad test (%dth input hash not hash %v)"+
-					"%d: %v", j, err, i, test)
-				continue
+				err = vm.Execute()
+				require.NoError(t, err, "failed to execute vm")
 			}
-
-			idxf, ok := input[1].(float64)
-			if !ok {
-				t.Errorf("bad test (%dth input idx not number)"+
-					"%d: %v", j, i, test)
-				continue
-			}
-			idx := testVecF64ToUint32(idxf)
-
-			oscript, ok := input[2].(string)
-			if !ok {
-				t.Errorf("bad test (%dth input script not "+
-					"string) %d: %v", j, i, test)
-				continue
-			}
-
-			script, err := parseShortForm(oscript)
-			if err != nil {
-				t.Errorf("bad test (%dth input script doesn't "+
-					"parse %v) %d: %v", j, err, i, test)
-				continue
-			}
-
-			var inputValue float64
-			if len(input) == 4 {
-				inputValue, ok = input[3].(float64)
-				if !ok {
-					t.Errorf("bad test (%dth input value not int) "+
-						"%d: %v", j, i, test)
-					continue
-				}
-			}
-
-			op := wire.NewOutPoint(prevhash, idx)
-			prevOutFetcher.AddPrevOut(*op, &wire.TxOut{
-				Value:    int64(inputValue),
-				PkScript: script,
-			})
-		}
-
-		for k, txin := range tx.MsgTx().TxIn {
-			prevOut := prevOutFetcher.FetchPrevOutput(
-				txin.PreviousOutPoint,
-			)
-			if prevOut == nil {
-				t.Errorf("bad test (missing %dth input) %d:%v",
-					k, i, test)
-				continue testloop
-			}
-			vm, err := NewEngine(prevOut.PkScript, tx.MsgTx(), k,
-				flags, nil, nil, prevOut.Value, prevOutFetcher)
-			if err != nil {
-				t.Errorf("test (%d:%v:%d) failed to create "+
-					"script: %v", i, test, k, err)
-				continue
-			}
-
-			err = vm.Execute()
-			if err != nil {
-				t.Errorf("test (%d:%v:%d) failed to execute: "+
-					"%v", i, test, k, err)
-				continue
-			}
-		}
+		})
 	}
 }
 
@@ -1143,4 +1030,178 @@ func testScriptCase(t *testing.T, tc *scriptTestCase, sigCache *SigCache) {
 	require.Contains(t, tc.errCodes, serr.ErrorCode, "returned "+
 		"unexpected error code, want %v, got %v, desc: %v", tc.errCodes,
 		serr.ErrorCode, serr)
+}
+
+// testInput defines a single test input.
+type testInput struct {
+	prevHash     chainhash.Hash
+	prevIdx      uint32
+	scriptPubKey []byte
+	amount       int64
+}
+
+// txValidTestCase is a test case for a valid transaction.
+type txValidTestCase struct {
+	lineNum int
+	inputs  []*testInput
+	tx      *btcutil.Tx
+	flags   ScriptFlags
+
+	comment string
+
+	// raw is the original line, useful for debugging.
+	raw interface{}
+}
+
+// prepareTxValidTestCase reads the `tx_valid.json` file, parses it and
+// returns a slice of scriptTestCase structs.
+func prepareTxValidTestCase() ([]*txValidTestCase, error) {
+	file, err := os.ReadFile("data/tx_valid.json")
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse json %w", err)
+	}
+
+	var tests [][]interface{}
+	err = json.Unmarshal(file, &tests)
+	if err != nil {
+		return nil, fmt.Errorf("failed to Unmarshal: %v", err)
+	}
+
+	comment := ""
+
+	testCases := make([]*txValidTestCase, 0, len(tests))
+	for i, test := range tests {
+		// Add the comments.
+		if len(test) == 1 {
+			comment += test[0].(string)
+			comment += "\n"
+			continue
+		}
+
+		tc, err := parseTxValidTestCase(test)
+		if err != nil {
+			return nil, fmt.Errorf("parse test case %d: %v", i, err)
+		}
+
+		// Remember the line num for debugging.
+		tc.lineNum = i + 1
+
+		// Attach the comments.
+		tc.comment = comment
+		testCases = append(testCases, tc)
+
+		// Reset the comments.
+		comment = ""
+	}
+
+	return testCases, nil
+}
+
+// parseTxValidTestCase takes one line from the json file and parses it into a
+// txValidTestCase. Each line has exactly 3 items, listed below,
+// 1. input(s).
+// 2. serialized tx.
+// 3. excluded verifyFlags.
+func parseTxValidTestCase(line []interface{}) (*txValidTestCase, error) {
+	// The line must have exactly 3 items.
+	if len(line) != 3 {
+		return nil, fmt.Errorf("corrupted line: %v", line)
+	}
+
+	var (
+		inputsStr       []interface{}
+		serializedTxStr string
+		flagsStr        string
+	)
+
+	// Parse inputs.
+	inputsStr = line[0].([]interface{})
+
+	inputs := make([]*testInput, 0)
+	for _, item := range inputsStr {
+		inp := item.([]interface{})
+
+		// Each input should have three or four items,
+		// - prevHash
+		// - prevIdx
+		// - scriptPubKey
+		// - amount (optional).
+		if len(inp) < 3 || len(inp) > 4 {
+			return nil, fmt.Errorf("corrupted input: %v", inp)
+		}
+
+		// Parse the prevHash.
+		prevHashStr := inp[0].(string)
+		prevHash, err := chainhash.NewHashFromStr(prevHashStr)
+		if err != nil {
+			return nil, err
+		}
+
+		// Parse the prevIdx.
+		idxf := inp[1].(float64)
+		idx := testVecF64ToUint32(idxf)
+
+		// Parse the scriptPubKey.
+		scriptPubKeyStr := inp[2].(string)
+		scriptPubKey, err := parseShortForm(scriptPubKeyStr)
+
+		// Parse the amount.
+		var amount int64
+		if len(inp) == 4 {
+			amount = int64(inp[3].(float64))
+		}
+
+		inputs = append(inputs, &testInput{
+			prevHash:     *prevHash,
+			prevIdx:      idx,
+			scriptPubKey: scriptPubKey,
+			amount:       amount,
+		})
+	}
+
+	// Parse the serialized tx.
+	serializedTxStr = line[1].(string)
+	serializedTx, err := hex.DecodeString(serializedTxStr)
+	if err != nil {
+		return nil, err
+	}
+
+	tx, err := btcutil.NewTxFromBytes(serializedTx)
+	if err != nil {
+		return nil, err
+	}
+
+	// Parse the excluded flags.
+	flagsStr = line[2].(string)
+	excludedFlags, err := parseScriptFlags(flagsStr)
+	if err != nil {
+		return nil, err
+	}
+
+	var allFlags ScriptFlags
+	for i := 1; i < int(scriptSentinal); i = i << 1 {
+		flag := ScriptFlags(i)
+		allFlags |= flag
+	}
+	flags := allFlags ^ excludedFlags
+
+	// Create the test case.
+	tc := &txValidTestCase{
+		inputs: inputs,
+		tx:     tx,
+		flags:  flags,
+	}
+
+	// Save the raw str for debugging.
+	tc.raw = struct {
+		inputs        []interface{}
+		txHex         string
+		excludedFlags string
+	}{
+		inputs:        inputsStr,
+		txHex:         serializedTxStr,
+		excludedFlags: flagsStr,
+	}
+
+	return tc, nil
 }
