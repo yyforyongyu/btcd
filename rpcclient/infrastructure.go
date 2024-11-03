@@ -798,6 +798,7 @@ func (c *Client) handleSendPostMessage(jReq *jsonRequest) {
 			jReq.responseChan <- &Response{result: nil, err: err}
 			return
 		}
+
 		httpReq.Close = true
 		httpReq.Header.Set("Content-Type", "application/json")
 		for key, value := range c.config.ExtraHeaders {
@@ -813,6 +814,7 @@ func (c *Client) handleSendPostMessage(jReq *jsonRequest) {
 		httpReq.SetBasicAuth(user, pass)
 
 		httpResponse, err = c.httpClient.Do(httpReq)
+		log.Tracef("HTTP POST Response=%v, err=%v", httpResponse, err)
 
 		// Quit the retry loop on success or if we can't retry anymore.
 		if err == nil || i == tries-1 {
@@ -905,7 +907,9 @@ out:
 		// is closed.
 		select {
 		case jReq := <-c.sendPostChan:
+			log.Debugf("Handle command [%s] with id %d", jReq.method, jReq.id)
 			c.handleSendPostMessage(jReq)
+			log.Debugf("Handled command [%s] with id %d", jReq.method, jReq.id)
 
 		case <-c.shutdown:
 			break out
