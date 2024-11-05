@@ -463,6 +463,7 @@ func unmarshalGetBlockChainInfoResultSoftForks(chainInfo *btcjson.GetBlockChainI
 // Receive waits for the Response promised by the future and returns chain info
 // result provided by the server.
 func (r FutureGetBlockChainInfoResult) Receive() (*btcjson.GetBlockChainInfoResult, error) {
+	log.Debugf("====> Start ReceiveFuture")
 	res, err := ReceiveFuture(r.Response)
 	if err != nil {
 		return nil, err
@@ -471,6 +472,7 @@ func (r FutureGetBlockChainInfoResult) Receive() (*btcjson.GetBlockChainInfoResu
 	if err != nil {
 		return nil, err
 	}
+	log.Debugf("====> Done ReceiveFuture")
 
 	// Inspect the version to determine how we'll need to parse the
 	// softforks from the response.
@@ -478,12 +480,14 @@ func (r FutureGetBlockChainInfoResult) Receive() (*btcjson.GetBlockChainInfoResu
 	if err != nil {
 		return nil, err
 	}
+	log.Debugf("====> Done BackendVersion")
 
 	err = unmarshalGetBlockChainInfoResultSoftForks(chainInfo, version, res)
 	if err != nil {
 		return nil, err
 	}
 
+	log.Debugf("====> Done Receive")
 	return chainInfo, nil
 }
 
@@ -504,6 +508,7 @@ func (c *Client) GetBlockChainInfoAsync() FutureGetBlockChainInfoResult {
 // various chain-specific details such as the current difficulty from the tip
 // of the main chain.
 func (c *Client) GetBlockChainInfo() (*btcjson.GetBlockChainInfoResult, error) {
+	log.Debugf("====> Start GetBlockChainInfo")
 	return c.GetBlockChainInfoAsync().Receive()
 }
 
