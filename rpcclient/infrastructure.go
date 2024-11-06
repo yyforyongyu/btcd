@@ -813,7 +813,10 @@ func (c *Client) handleSendPostMessage(jReq *jsonRequest) {
 		}
 		httpReq.SetBasicAuth(user, pass)
 
+		log.Debugf("Sending HTTP POST")
 		httpResponse, err = c.httpClient.Do(httpReq)
+		log.Debugf("HTTP POST Response=%v, err=%v", httpResponse, err)
+
 		log.Tracef("HTTP POST Response=%v, err=%v", httpResponse, err)
 
 		// Quit the retry loop on success or if we can't retry anymore.
@@ -893,7 +896,10 @@ func (c *Client) handleSendPostMessage(jReq *jsonRequest) {
 	} else {
 		res, err = resp.result()
 	}
+
+	log.Debugf("sending resp, err=%v", err)
 	jReq.responseChan <- &Response{result: res, err: err}
+	log.Debugf("finished sending resp, err=%v", err)
 }
 
 // sendPostHandler handles all outgoing messages when the client is running
@@ -942,7 +948,12 @@ func (c *Client) sendPostRequest(jReq *jsonRequest) {
 	// Don't send the message if shutting down.
 	select {
 	case <-c.shutdown:
-		jReq.responseChan <- &Response{result: nil, err: ErrClientShutdown}
+		jReq.responseChan <- &Response{
+			result: nil,
+			err:    ErrClientShutdown,
+		}
+
+		return
 	default:
 	}
 
