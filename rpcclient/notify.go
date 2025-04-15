@@ -1151,7 +1151,7 @@ func (r FutureRescanResult) Receive() error {
 // NOTE: This is a btcd extension and requires a websocket connection.
 //
 // Deprecated: Use RescanBlocksAsync instead.
-func (c *Client) RescanAsync(startBlock *chainhash.Hash,
+func (c *Client) RescanAsync(startBlock, endBlock *chainhash.Hash,
 	addresses []btcutil.Address,
 	outpoints []*wire.OutPoint) FutureRescanResult {
 
@@ -1167,9 +1167,16 @@ func (c *Client) RescanAsync(startBlock *chainhash.Hash,
 	}
 
 	// Convert block hashes to strings.
-	var startBlockHashStr string
+	var (
+		startBlockHashStr string
+		endBlockHashStr   string
+	)
+
 	if startBlock != nil {
 		startBlockHashStr = startBlock.String()
+	}
+	if endBlock != nil {
+		endBlockHashStr = endBlock.String()
 	}
 
 	// Convert addresses to strings.
@@ -1184,7 +1191,9 @@ func (c *Client) RescanAsync(startBlock *chainhash.Hash,
 		ops = append(ops, newOutPointFromWire(op))
 	}
 
-	cmd := btcjson.NewRescanCmd(startBlockHashStr, addrs, ops, nil)
+	cmd := btcjson.NewRescanCmd(
+		startBlockHashStr, addrs, ops, &endBlockHashStr,
+	)
 	return c.SendCmd(cmd)
 }
 
@@ -1216,11 +1225,13 @@ func (c *Client) RescanAsync(startBlock *chainhash.Hash,
 // NOTE: This is a btcd extension and requires a websocket connection.
 //
 // Deprecated: Use RescanBlocks instead.
-func (c *Client) Rescan(startBlock *chainhash.Hash,
+func (c *Client) Rescan(startBlock, endBlock *chainhash.Hash,
 	addresses []btcutil.Address,
 	outpoints []*wire.OutPoint) error {
 
-	return c.RescanAsync(startBlock, addresses, outpoints).Receive()
+	return c.RescanAsync(
+		startBlock, endBlock, addresses, outpoints,
+	).Receive()
 }
 
 // RescanEndBlockAsync returns an instance of a type that can be used to get
