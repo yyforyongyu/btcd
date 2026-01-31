@@ -20,36 +20,9 @@ import (
 	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/wire"
+	"github.com/davecgh/go-spew/spew"
+	"github.com/stretchr/testify/require"
 )
-
-// scriptTestName returns a descriptive test name for the given reference script
-// test data.
-func scriptTestName(test []interface{}) (string, error) {
-	// Account for any optional leading witness data.
-	var witnessOffset int
-	if _, ok := test[0].([]interface{}); ok {
-		witnessOffset++
-	}
-
-	// In addition to the optional leading witness data, the test must
-	// consist of at least a signature script, public key script, flags,
-	// and expected error.  Finally, it may optionally contain a comment.
-	if len(test) < witnessOffset+4 || len(test) > witnessOffset+5 {
-		return "", fmt.Errorf("invalid test length %d", len(test))
-	}
-
-	// Use the comment for the test name if one is specified, otherwise,
-	// construct the name based on the signature script, public key script,
-	// and flags.
-	var name string
-	if len(test) == witnessOffset+5 {
-		name = fmt.Sprintf("test (%s)", test[witnessOffset+4])
-	} else {
-		name = fmt.Sprintf("test ([%s, %s, %s])", test[witnessOffset],
-			test[witnessOffset+1], test[witnessOffset+2])
-	}
-	return name, nil
-}
 
 // parse hex string into a []byte.
 func parseHex(tok string) ([]byte, error) {
@@ -330,182 +303,27 @@ type scriptWithInputVal struct {
 	pkScript []byte
 }
 
-// testScripts ensures all of the passed script tests execute with the expected
-// results with or without using a signature cache, as specified by the
-// parameter.
-func testScripts(t *testing.T, tests [][]interface{}, useSigCache bool) {
-	// Create a signature cache to use only if requested.
-	var sigCache *SigCache
-	if useSigCache {
-		sigCache = NewSigCache(10)
-	}
-
-	for i, test := range tests {
-		// "Format is: [[wit..., amount]?, scriptSig, scriptPubKey,
-		//    flags, expected_scripterror, ... comments]"
-
-		// Skip single line comments.
-		if len(test) == 1 {
-			continue
-		}
-
-		// Construct a name for the test based on the comment and test
-		// data.
-		name, err := scriptTestName(test)
-		if err != nil {
-			t.Errorf("TestScripts: invalid test #%d: %v", i, err)
-			continue
-		}
-
-		var (
-			witness  wire.TxWitness
-			inputAmt btcutil.Amount
-		)
-
-		// When the first field of the test data is a slice it contains
-		// witness data and everything else is offset by 1 as a result.
-		witnessOffset := 0
-		if witnessData, ok := test[0].([]interface{}); ok {
-			witnessOffset++
-
-			// If this is a witness test, then the final element
-			// within the slice is the input amount, so we ignore
-			// all but the last element in order to parse the
-			// witness stack.
-			strWitnesses := witnessData[:len(witnessData)-1]
-			witness, err = parseWitnessStack(strWitnesses)
-			if err != nil {
-				t.Errorf("%s: can't parse witness; %v", name, err)
-				continue
-			}
-
-			inputAmt, err = btcutil.NewAmount(witnessData[len(witnessData)-1].(float64))
-			if err != nil {
-				t.Errorf("%s: can't parse input amt: %v",
-					name, err)
-				continue
-			}
-
-		}
-
-		// Extract and parse the signature script from the test fields.
-		scriptSigStr, ok := test[witnessOffset].(string)
-		if !ok {
-			t.Errorf("%s: signature script is not a string", name)
-			continue
-		}
-		scriptSig, err := parseShortForm(scriptSigStr)
-		if err != nil {
-			t.Errorf("%s: can't parse signature script: %v", name,
-				err)
-			continue
-		}
-
-		// Extract and parse the public key script from the test fields.
-		scriptPubKeyStr, ok := test[witnessOffset+1].(string)
-		if !ok {
-			t.Errorf("%s: public key script is not a string", name)
-			continue
-		}
-		scriptPubKey, err := parseShortForm(scriptPubKeyStr)
-		if err != nil {
-			t.Errorf("%s: can't parse public key script: %v", name,
-				err)
-			continue
-		}
-
-		// Extract and parse the script flags from the test fields.
-		flagsStr, ok := test[witnessOffset+2].(string)
-		if !ok {
-			t.Errorf("%s: flags field is not a string", name)
-			continue
-		}
-		flags, err := parseScriptFlags(flagsStr)
-		if err != nil {
-			t.Errorf("%s: %v", name, err)
-			continue
-		}
-
-		// Extract and parse the expected result from the test fields.
-		//
-		// Convert the expected result string into the allowed script
-		// error codes.  This is necessary because txscript is more
-		// fine grained with its errors than the reference test data, so
-		// some of the reference test data errors map to more than one
-		// possibility.
-		resultStr, ok := test[witnessOffset+3].(string)
-		if !ok {
-			t.Errorf("%s: result field is not a string", name)
-			continue
-		}
-		allowedErrorCodes, err := parseExpectedResult(resultStr)
-		if err != nil {
-			t.Errorf("%s: %v", name, err)
-			continue
-		}
-
-		// Generate a transaction pair such that one spends from the
-		// other and the provided signature and public key scripts are
-		// used, then create a new engine to execute the scripts.
-		tx := createSpendingTx(
-			witness, scriptSig, scriptPubKey, int64(inputAmt),
-		)
-		prevOuts := NewCannedPrevOutputFetcher(scriptPubKey, int64(inputAmt))
-		vm, err := NewEngine(
-			scriptPubKey, tx, 0, flags, sigCache, nil,
-			int64(inputAmt), prevOuts,
-		)
-		if err == nil {
-			err = vm.Execute()
-		}
-
-		// Ensure there were no errors when the expected result is OK.
-		if resultStr == "OK" {
-			if err != nil {
-				t.Errorf("%s failed to execute: %v", name, err)
-			}
-			continue
-		}
-
-		// At this point an error was expected so ensure the result of
-		// the execution matches it.
-		success := false
-		for _, code := range allowedErrorCodes {
-			if IsErrorCode(err, code) {
-				success = true
-				break
-			}
-		}
-		if !success {
-			if serr, ok := err.(Error); ok {
-				t.Errorf("%s: want error codes %v, got %v", name,
-					allowedErrorCodes, serr.ErrorCode)
-				continue
-			}
-			t.Errorf("%s: want error codes %v, got err: %v (%T)",
-				name, allowedErrorCodes, err, err)
-			continue
-		}
-	}
-}
-
 // TestScripts ensures all of the tests in script_tests.json execute with the
 // expected results as defined in the test data.
 func TestScripts(t *testing.T) {
-	file, err := os.ReadFile("data/script_tests.json")
-	if err != nil {
-		t.Fatalf("TestScripts: %v\n", err)
-	}
+	// Prepare the test cases.
+	testCases, err := prepareScriptTestCases()
+	require.NoError(t, err)
 
-	var tests [][]interface{}
-	err = json.Unmarshal(file, &tests)
-	if err != nil {
-		t.Fatalf("TestScripts couldn't Unmarshal: %v", err)
-	}
+	sigCache := NewSigCache(10)
 
 	// Run all script tests with and without the signature cache.
-	testScripts(t, tests, true)
-	testScripts(t, tests, false)
+	for _, tc := range testCases {
+		name := fmt.Sprintf("line %d", tc.lineNum)
+		t.Run(name, func(t *testing.T) {
+			testScriptCase(t, tc, nil)
+		})
+
+		name = fmt.Sprintf("line %d with cache", tc.lineNum)
+		t.Run(name, func(t *testing.T) {
+			testScriptCase(t, tc, sigCache)
+		})
+	}
 }
 
 // testVecF64ToUint32 properly handles conversion of float64s read from the JSON
@@ -681,156 +499,43 @@ testloop:
 
 // TestTxValidTests ensures all of the tests in tx_valid.json pass as expected.
 func TestTxValidTests(t *testing.T) {
-	file, err := os.ReadFile("data/tx_valid.json")
-	if err != nil {
-		t.Fatalf("TestTxValidTests: %v\n", err)
-	}
+	// Prepare the test cases.
+	testCases, err := prepareTxValidTestCase()
+	require.NoError(t, err)
 
-	var tests [][]interface{}
-	err = json.Unmarshal(file, &tests)
-	if err != nil {
-		t.Fatalf("TestTxValidTests couldn't Unmarshal: %v\n", err)
-	}
+	for _, tc := range testCases {
+		name := fmt.Sprintf("line %d", tc.lineNum)
+		t.Run(name, func(t *testing.T) {
+			t.Logf("Running test case %s", spew.Sdump(tc))
 
-	// form is either:
-	//   ["this is a comment "]
-	// or:
-	//   [[[previous hash, previous index, previous scriptPubKey, input value]...,]
-	//	serializedTransaction, verifyFlags]
-testloop:
-	for i, test := range tests {
-		inputs, ok := test[0].([]interface{})
-		if !ok {
-			continue
-		}
-
-		if len(test) != 3 {
-			t.Errorf("bad test (bad length) %d: %v", i, test)
-			continue
-		}
-		serializedhex, ok := test[1].(string)
-		if !ok {
-			t.Errorf("bad test (arg 2 not string) %d: %v", i, test)
-			continue
-		}
-		serializedTx, err := hex.DecodeString(serializedhex)
-		if err != nil {
-			t.Errorf("bad test (arg 2 not hex %v) %d: %v", err, i,
-				test)
-			continue
-		}
-
-		tx, err := btcutil.NewTxFromBytes(serializedTx)
-		if err != nil {
-			t.Errorf("bad test (arg 2 not msgtx %v) %d: %v", err,
-				i, test)
-			continue
-		}
-
-		verifyFlags, ok := test[2].(string)
-		if !ok {
-			t.Errorf("bad test (arg 3 not string) %d: %v", i, test)
-			continue
-		}
-
-		flags, err := parseScriptFlags(verifyFlags)
-		if err != nil {
-			t.Errorf("bad test %d: %v", i, err)
-			continue
-		}
-
-		prevOutFetcher := NewMultiPrevOutFetcher(nil)
-		for j, iinput := range inputs {
-			input, ok := iinput.([]interface{})
-			if !ok {
-				t.Errorf("bad test (%dth input not array)"+
-					"%d: %v", j, i, test)
-				continue
+			prevOutFetcher := NewMultiPrevOutFetcher(nil)
+			for _, inp := range tc.inputs {
+				op := wire.NewOutPoint(
+					&inp.prevHash, inp.prevIdx,
+				)
+				prevOutFetcher.AddPrevOut(*op, &wire.TxOut{
+					Value:    inp.amount,
+					PkScript: inp.scriptPubKey,
+				})
 			}
 
-			if len(input) < 3 || len(input) > 4 {
-				t.Errorf("bad test (%dth input wrong length)"+
-					"%d: %v", j, i, test)
-				continue
-			}
+			for k, txin := range tc.tx.MsgTx().TxIn {
+				prevOut := prevOutFetcher.FetchPrevOutput(
+					txin.PreviousOutPoint,
+				)
+				require.NotNil(t, prevOut)
 
-			previoustx, ok := input[0].(string)
-			if !ok {
-				t.Errorf("bad test (%dth input hash not string)"+
-					"%d: %v", j, i, test)
-				continue
-			}
+				vm, err := NewEngine(
+					prevOut.PkScript, tc.tx.MsgTx(), k,
+					tc.flags, nil, nil, prevOut.Value,
+					prevOutFetcher,
+				)
+				require.NoError(t, err, "failed to create vm")
 
-			prevhash, err := chainhash.NewHashFromStr(previoustx)
-			if err != nil {
-				t.Errorf("bad test (%dth input hash not hash %v)"+
-					"%d: %v", j, err, i, test)
-				continue
+				err = vm.Execute()
+				require.NoError(t, err, "failed to execute vm")
 			}
-
-			idxf, ok := input[1].(float64)
-			if !ok {
-				t.Errorf("bad test (%dth input idx not number)"+
-					"%d: %v", j, i, test)
-				continue
-			}
-			idx := testVecF64ToUint32(idxf)
-
-			oscript, ok := input[2].(string)
-			if !ok {
-				t.Errorf("bad test (%dth input script not "+
-					"string) %d: %v", j, i, test)
-				continue
-			}
-
-			script, err := parseShortForm(oscript)
-			if err != nil {
-				t.Errorf("bad test (%dth input script doesn't "+
-					"parse %v) %d: %v", j, err, i, test)
-				continue
-			}
-
-			var inputValue float64
-			if len(input) == 4 {
-				inputValue, ok = input[3].(float64)
-				if !ok {
-					t.Errorf("bad test (%dth input value not int) "+
-						"%d: %v", j, i, test)
-					continue
-				}
-			}
-
-			op := wire.NewOutPoint(prevhash, idx)
-			prevOutFetcher.AddPrevOut(*op, &wire.TxOut{
-				Value:    int64(inputValue),
-				PkScript: script,
-			})
-		}
-
-		for k, txin := range tx.MsgTx().TxIn {
-			prevOut := prevOutFetcher.FetchPrevOutput(
-				txin.PreviousOutPoint,
-			)
-			if prevOut == nil {
-				t.Errorf("bad test (missing %dth input) %d:%v",
-					k, i, test)
-				continue testloop
-			}
-			vm, err := NewEngine(prevOut.PkScript, tx.MsgTx(), k,
-				flags, nil, nil, prevOut.Value, prevOutFetcher)
-			if err != nil {
-				t.Errorf("test (%d:%v:%d) failed to create "+
-					"script: %v", i, test, k, err)
-				continue
-			}
-
-			err = vm.Execute()
-			if err != nil {
-				t.Errorf("test (%d:%v:%d) failed to execute: "+
-					"%v", i, test, k, err)
-				continue
-			}
-		}
+		})
 	}
 }
 
@@ -1077,4 +782,426 @@ func TestTaprootReferenceTests(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unable to execute taproot test vectors: %v", err)
 	}
+}
+
+// scriptTestCase defines a test case to run against the script engine.
+type scriptTestCase struct {
+	lineNum      int
+	witness      [][]byte
+	amount       btcutil.Amount
+	scriptSig    []byte
+	scriptPubKey []byte
+	flags        ScriptFlags
+	errCodes     []ErrorCode
+	comment      string
+
+	// raw is the original line, useful for debugging.
+	raw interface{}
+}
+
+// prepareScriptTestCases reads the `script_tests.json` file, parses it and
+// returns a slice of scriptTestCase structs.
+func prepareScriptTestCases() ([]*scriptTestCase, error) {
+	file, err := os.ReadFile("data/script_tests.json")
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse json %w", err)
+	}
+
+	var tests [][]interface{}
+	err = json.Unmarshal(file, &tests)
+	if err != nil {
+		return nil, fmt.Errorf("failed to Unmarshal: %v", err)
+	}
+
+	testCases := make([]*scriptTestCase, 0, len(tests))
+	for i, test := range tests {
+		// Skip single line comments.
+		if len(test) == 1 {
+			continue
+		}
+
+		tc, err := parseScriptTestCase(test)
+		if err != nil {
+			return nil, fmt.Errorf("parse test case %d: %v", i, err)
+		}
+
+		// Remember the line num for debugging.
+		tc.lineNum = i + 1
+		testCases = append(testCases, tc)
+	}
+
+	return testCases, nil
+}
+
+// parseScriptTestCase takes one line from the json file and parses it into a
+// scriptTestCase. Each line has at most 6 items and at least 4 items, listed
+// below,
+// 1. Witness data and amount, optional.
+// 2. scriptSig.
+// 3. scriptPubKey.
+// 4. Flags.
+// 5. Expected error code.
+// 6. Comment, optional.
+func parseScriptTestCase(line []interface{}) (*scriptTestCase, error) {
+	// The line must have at least 4 items and at most 6 items.
+	if len(line) < 4 || len(line) > 6 {
+		return nil, fmt.Errorf("corrupted line: %v", line)
+	}
+
+	var (
+		witnessStr      []interface{}
+		scriptSigStr    string
+		scriptPubKeyStr string
+		flagsStr        string
+		errCodeStr      string
+		comment         string
+	)
+
+	// We now parse the line based on the number of items found.
+	switch len(line) {
+	// If there are exactly four items, they must be,
+	// - scriptSig.
+	// - scriptPubKey.
+	// - Flags.
+	// - Expected error code.
+	case 4:
+		scriptSigStr = line[0].(string)
+		scriptPubKeyStr = line[1].(string)
+		flagsStr = line[2].(string)
+		errCodeStr = line[3].(string)
+
+	// If there are six items, they must be exactly 6 items in the order,
+	// - Witness data.
+	// - scriptSig.
+	// - scriptPubKey.
+	// - Flags.
+	// - Expected error code.
+	// - Comment.
+	case 6:
+		witnessStr = line[0].([]interface{})
+		scriptSigStr = line[1].(string)
+		scriptPubKeyStr = line[2].(string)
+		flagsStr = line[3].(string)
+		errCodeStr = line[4].(string)
+		comment = line[5].(string)
+
+	// If there are five items, we need to know whether the first item is
+	// witness data or not to parse the rest.
+	default:
+		offset := 0
+
+		// If the first item is a slice, it must be witness data.
+		firstItem, ok := line[0].([]interface{})
+		if ok {
+			witnessStr = firstItem
+			offset++
+		} else {
+			// If the first item is not a slice, then the last item
+			// must be a comment.
+			comment = line[4].(string)
+		}
+
+		scriptSigStr = line[offset].(string)
+		scriptPubKeyStr = line[offset+1].(string)
+		flagsStr = line[offset+2].(string)
+		errCodeStr = line[offset+3].(string)
+	}
+
+	// Init a test case.
+	tc := &scriptTestCase{}
+
+	// We have parsed out the items in string, and now we can parse them
+	// into types.
+	if len(witnessStr) > 0 {
+		// If this is a witness test, then the final element
+		// within the slice is the input amount, so we ignore
+		// all but the last element in order to parse the
+		// witness stack.
+		strWitnesses := witnessStr[:len(witnessStr)-1]
+		witness, err := parseWitnessStack(strWitnesses)
+		if err != nil {
+			return nil, fmt.Errorf("can't parse witness; %w", err)
+		}
+
+		amt, err := btcutil.NewAmount(
+			witnessStr[len(witnessStr)-1].(float64),
+		)
+		if err != nil {
+			return nil, fmt.Errorf("can't parse input amt: %w", err)
+		}
+
+		tc.witness = witness
+		tc.amount = amt
+	}
+
+	// Parse the scriptSig.
+	scriptSig, err := parseShortForm(scriptSigStr)
+	if err != nil {
+		return nil, fmt.Errorf("can't parse signature script: %w", err)
+	}
+
+	// Parse the scriptPubKey.
+	scriptPubKey, err := parseShortForm(scriptPubKeyStr)
+	if err != nil {
+		return nil, fmt.Errorf("can't parse scriptPubKey: %w", err)
+	}
+
+	// Parse the flags.
+	flags, err := parseScriptFlags(flagsStr)
+	if err != nil {
+		return nil, fmt.Errorf("can't parse flags %w", err)
+	}
+
+	// Parse the expected error code.
+	allowedErrorCodes, err := parseExpectedResult(errCodeStr)
+	if err != nil {
+		return nil, fmt.Errorf("can't parse error code: %w", err)
+	}
+
+	// Set the parsed values into the test case.
+	tc.scriptSig = scriptSig
+	tc.scriptPubKey = scriptPubKey
+	tc.flags = flags
+	tc.errCodes = allowedErrorCodes
+	tc.comment = comment
+
+	// Save the raw str for debugging.
+	tc.raw = struct {
+		witness      []interface{}
+		scriptSig    string
+		scriptPubKey string
+		flags        string
+		errCode      string
+		comment      string
+	}{
+		witness:      witnessStr,
+		scriptSig:    scriptSigStr,
+		scriptPubKey: scriptPubKeyStr,
+		flags:        flagsStr,
+		errCode:      errCodeStr,
+		comment:      comment,
+	}
+
+	return tc, nil
+}
+
+// testScriptCase runs the test over a single scriptTestCase.
+func testScriptCase(t *testing.T, tc *scriptTestCase, sigCache *SigCache) {
+	t.Logf("Running test case %s", spew.Sdump(tc))
+
+	// Generate a transaction pair such that one spends from the other and
+	// the provided signature and public key scripts are used, then create
+	// a new engine to execute the scripts.
+	tx := createSpendingTx(
+		tc.witness, tc.scriptSig, tc.scriptPubKey, int64(tc.amount),
+	)
+	prevOuts := NewCannedPrevOutputFetcher(
+		tc.scriptPubKey, int64(tc.amount),
+	)
+
+	// Create a testing engine.
+	vm, err := NewEngine(
+		tc.scriptPubKey, tx, 0, tc.flags, sigCache, nil,
+		int64(tc.amount), prevOuts,
+	)
+
+	// Execute the script engine and check the expected error is returned.
+	//
+	// TODO(yy): differentiate the creation err vs execution err?
+	if err == nil {
+		err = vm.Execute()
+	}
+
+	// Ensure there were no errors when the expected result is OK.
+	if tc.errCodes == nil {
+		require.NoError(t, err, "failed to create/execute engine")
+		return
+	}
+
+	// At this point an error was expected so ensure the result of the
+	// execution matches it.
+	//
+	// We expect the returned err is the defined type.
+	serr, ok := err.(Error)
+	require.True(t, ok, "error is not a script error")
+
+	// We expect the returned error code is contained in the expected error
+	// code list.
+	require.Contains(t, tc.errCodes, serr.ErrorCode, "returned "+
+		"unexpected error code, want %v, got %v, desc: %v", tc.errCodes,
+		serr.ErrorCode, serr)
+}
+
+// testInput defines a single test input.
+type testInput struct {
+	prevHash     chainhash.Hash
+	prevIdx      uint32
+	scriptPubKey []byte
+	amount       int64
+}
+
+// txValidTestCase is a test case for a valid transaction.
+type txValidTestCase struct {
+	lineNum int
+	inputs  []*testInput
+	tx      *btcutil.Tx
+	flags   ScriptFlags
+
+	comment string
+
+	// raw is the original line, useful for debugging.
+	raw interface{}
+}
+
+// prepareTxValidTestCase reads the `tx_valid.json` file, parses it and
+// returns a slice of scriptTestCase structs.
+func prepareTxValidTestCase() ([]*txValidTestCase, error) {
+	file, err := os.ReadFile("data/tx_valid.json")
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse json %w", err)
+	}
+
+	var tests [][]interface{}
+	err = json.Unmarshal(file, &tests)
+	if err != nil {
+		return nil, fmt.Errorf("failed to Unmarshal: %v", err)
+	}
+
+	comment := ""
+
+	testCases := make([]*txValidTestCase, 0, len(tests))
+	for i, test := range tests {
+		// Add the comments.
+		if len(test) == 1 {
+			comment += test[0].(string)
+			comment += "\n"
+			continue
+		}
+
+		tc, err := parseTxValidTestCase(test)
+		if err != nil {
+			return nil, fmt.Errorf("parse test case %d: %v", i, err)
+		}
+
+		// Remember the line num for debugging.
+		tc.lineNum = i + 1
+
+		// Attach the comments.
+		tc.comment = comment
+		testCases = append(testCases, tc)
+
+		// Reset the comments.
+		comment = ""
+	}
+
+	return testCases, nil
+}
+
+// parseTxValidTestCase takes one line from the json file and parses it into a
+// txValidTestCase. Each line has exactly 3 items, listed below,
+// 1. input(s).
+// 2. serialized tx.
+// 3. excluded verifyFlags.
+func parseTxValidTestCase(line []interface{}) (*txValidTestCase, error) {
+	// The line must have exactly 3 items.
+	if len(line) != 3 {
+		return nil, fmt.Errorf("corrupted line: %v", line)
+	}
+
+	var (
+		inputsStr       []interface{}
+		serializedTxStr string
+		flagsStr        string
+	)
+
+	// Parse inputs.
+	inputsStr = line[0].([]interface{})
+
+	inputs := make([]*testInput, 0)
+	for _, item := range inputsStr {
+		inp := item.([]interface{})
+
+		// Each input should have three or four items,
+		// - prevHash
+		// - prevIdx
+		// - scriptPubKey
+		// - amount (optional).
+		if len(inp) < 3 || len(inp) > 4 {
+			return nil, fmt.Errorf("corrupted input: %v", inp)
+		}
+
+		// Parse the prevHash.
+		prevHashStr := inp[0].(string)
+		prevHash, err := chainhash.NewHashFromStr(prevHashStr)
+		if err != nil {
+			return nil, err
+		}
+
+		// Parse the prevIdx.
+		idxf := inp[1].(float64)
+		idx := testVecF64ToUint32(idxf)
+
+		// Parse the scriptPubKey.
+		scriptPubKeyStr := inp[2].(string)
+		scriptPubKey, err := parseShortForm(scriptPubKeyStr)
+
+		// Parse the amount.
+		var amount int64
+		if len(inp) == 4 {
+			amount = int64(inp[3].(float64))
+		}
+
+		inputs = append(inputs, &testInput{
+			prevHash:     *prevHash,
+			prevIdx:      idx,
+			scriptPubKey: scriptPubKey,
+			amount:       amount,
+		})
+	}
+
+	// Parse the serialized tx.
+	serializedTxStr = line[1].(string)
+	serializedTx, err := hex.DecodeString(serializedTxStr)
+	if err != nil {
+		return nil, err
+	}
+
+	tx, err := btcutil.NewTxFromBytes(serializedTx)
+	if err != nil {
+		return nil, err
+	}
+
+	// Parse the excluded flags.
+	flagsStr = line[2].(string)
+	excludedFlags, err := parseScriptFlags(flagsStr)
+	if err != nil {
+		return nil, err
+	}
+
+	var allFlags ScriptFlags
+	for i := 1; i < int(scriptSentinal); i = i << 1 {
+		flag := ScriptFlags(i)
+		allFlags |= flag
+	}
+	flags := allFlags ^ excludedFlags
+
+	// Create the test case.
+	tc := &txValidTestCase{
+		inputs: inputs,
+		tx:     tx,
+		flags:  flags,
+	}
+
+	// Save the raw str for debugging.
+	tc.raw = struct {
+		inputs        []interface{}
+		txHex         string
+		excludedFlags string
+	}{
+		inputs:        inputsStr,
+		txHex:         serializedTxStr,
+		excludedFlags: flagsStr,
+	}
+
+	return tc, nil
 }
