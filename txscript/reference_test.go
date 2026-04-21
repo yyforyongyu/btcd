@@ -205,6 +205,42 @@ func parseScriptFlags(flagStr string) (ScriptFlags, error) {
 	return flags, nil
 }
 
+// allScriptFlags returns the set of all currently defined script flags.
+func allScriptFlags() ScriptFlags {
+	return ScriptBip16 |
+		ScriptStrictMultiSig |
+		ScriptDiscourageUpgradableNops |
+		ScriptVerifyCheckLockTimeVerify |
+		ScriptVerifyCheckSequenceVerify |
+		ScriptVerifyCleanStack |
+		ScriptVerifyDERSignatures |
+		ScriptVerifyLowS |
+		ScriptVerifyMinimalData |
+		ScriptVerifyNullFail |
+		ScriptVerifySigPushOnly |
+		ScriptVerifyStrictEncoding |
+		ScriptVerifyWitness |
+		ScriptVerifyDiscourageUpgradeableWitnessProgram |
+		ScriptVerifyMinimalIf |
+		ScriptVerifyWitnessPubKeyType |
+		ScriptVerifyTaproot |
+		ScriptVerifyDiscourageUpgradeableTaprootVersion |
+		ScriptVerifyDiscourageOpSuccess |
+		ScriptVerifyDiscourageUpgradeablePubkeyType |
+		ScriptVerifyConstScriptCode
+}
+
+// parseTxValidTestFlags parses the tx_valid flag field. Modern Bitcoin Core
+// tx_valid vectors encode flags to exclude from the full set of script flags.
+func parseTxValidTestFlags(flagStr string) (ScriptFlags, error) {
+	excluded, err := parseScriptFlags(flagStr)
+	if err != nil {
+		return 0, err
+	}
+
+	return allScriptFlags() &^ excluded, nil
+}
+
 // hasTaprootScriptTest returns whether the reference script test is one of the
 // newer taproot cases embedded in script_tests.json. Those vectors rely on
 // Bitcoin Core-specific placeholder macros, while btcd covers taproot via the
@@ -765,7 +801,7 @@ testloop:
 			continue
 		}
 
-		flags, err := parseScriptFlags(verifyFlags)
+		flags, err := parseTxValidTestFlags(verifyFlags)
 		if err != nil {
 			t.Errorf("bad test %d: %v", i, err)
 			continue
