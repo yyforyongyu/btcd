@@ -205,6 +205,25 @@ func parseScriptFlags(flagStr string) (ScriptFlags, error) {
 	return flags, nil
 }
 
+// hasTaprootScriptTest returns whether the reference script test is one of the
+// newer taproot cases embedded in script_tests.json. Those vectors rely on
+// Bitcoin Core-specific placeholder macros, while btcd covers taproot via the
+// dedicated data/taproot-ref harness in TestTaprootReferenceTests.
+func hasTaprootScriptTest(test []interface{}) bool {
+	// Account for any optional leading witness data.
+	var witnessOffset int
+	if _, ok := test[0].([]interface{}); ok {
+		witnessOffset++
+	}
+
+	if len(test) < witnessOffset+3 {
+		return false
+	}
+
+	flags, ok := test[witnessOffset+2].(string)
+	return ok && strings.Contains(flags, "TAPROOT")
+}
+
 // parseExpectedResult parses the provided expected result string into allowed
 // script error codes.  An error is returned if the expected result string is
 // not supported.
@@ -228,6 +247,8 @@ func parseExpectedResult(expected string) ([]ErrorCode, error) {
 		return []ErrorCode{ErrEvalFalse, ErrEmptyStack}, nil
 	case "EQUALVERIFY":
 		return []ErrorCode{ErrEqualVerify}, nil
+	case "NUMEQUALVERIFY":
+		return []ErrorCode{ErrNumEqualVerify}, nil
 	case "NULLFAIL":
 		return []ErrorCode{ErrNullFail}, nil
 	case "SIG_HIGH_S":
@@ -269,6 +290,8 @@ func parseExpectedResult(expected string) ([]ErrorCode, error) {
 		return []ErrorCode{ErrInvalidSignatureCount}, nil
 	case "MINIMALDATA":
 		return []ErrorCode{ErrMinimalData}, nil
+	case "SCRIPTNUM":
+		return []ErrorCode{ErrNumberTooBig, ErrMinimalData}, nil
 	case "NEGATIVE_LOCKTIME":
 		return []ErrorCode{ErrNegativeLockTime}, nil
 	case "UNSATISFIED_LOCKTIME":
@@ -291,6 +314,8 @@ func parseExpectedResult(expected string) ([]ErrorCode, error) {
 		return []ErrorCode{ErrWitnessUnexpected}, nil
 	case "WITNESS_PUBKEYTYPE":
 		return []ErrorCode{ErrWitnessPubKeyType}, nil
+	case "TAPSCRIPT_EMPTY_PUBKEY":
+		return []ErrorCode{ErrTaprootPubkeyIsEmpty}, nil
 	}
 
 	return nil, fmt.Errorf("unrecognized expected result in test data: %v",
@@ -346,6 +371,13 @@ func testScripts(t *testing.T, tests [][]interface{}, useSigCache bool) {
 
 		// Skip single line comments.
 		if len(test) == 1 {
+			continue
+		}
+
+		// Taproot entries in the latest Bitcoin Core script_tests.json rely on
+		// placeholder macros (for example #SCRIPT# and #CONTROLBLOCK#).  btcd
+		// validates taproot separately via TestTaprootReferenceTests.
+		if hasTaprootScriptTest(test) {
 			continue
 		}
 
