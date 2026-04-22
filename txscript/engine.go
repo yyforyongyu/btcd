@@ -1469,7 +1469,7 @@ func (vm *Engine) buildWitnessProgram(scriptSig, scriptPubKey []byte,
 	var witProgram []byte
 
 	switch {
-	case IsWitnessProgram(vm.scripts[1]):
+	case IsWitnessProgram(scriptPubKey):
 		// The scriptSig must be *empty* for all native witness programs,
 		// otherwise we introduce malleability.
 		if len(scriptSig) != 0 {
